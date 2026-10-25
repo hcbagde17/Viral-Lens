@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Data directories (keep directory structure if needed, ignore data files)
+data/
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/thumbnails/.gitkeep
+!data/processed/.gitkeep
+#tests
+tests/
+
+# Model artifacts and weights
+artifacts/
+!artifacts/.gitkeep
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Testing and linting caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
