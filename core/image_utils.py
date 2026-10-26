@@ -116,14 +116,10 @@ def save_thumbnail(
 
 def load_image_for_model(
     img_source: Union[str, Path, bytes, Image.Image],
-    target_size: Tuple[int, int] = MODEL_IMAGE_SIZE,
+    target_size: Optional[Tuple[int, int]] = MODEL_IMAGE_SIZE,
     fallback_to_placeholder: bool = True
 ) -> Image.Image:
-    """
-    Loads, validates, and resizes an image to target_size (default: 224x224 RGB).
-    If invalid or missing and fallback_to_placeholder is True, returns a neutral gray image.
-    Used by predictor and training data loader.
-    """
+    """Loads an RGB image from path, bytes, or PIL Image, with optional gray placeholder fallback."""
     img = None
     if isinstance(img_source, Image.Image):
         img = img_source.convert("RGB")
@@ -142,11 +138,11 @@ def load_image_for_model(
 
     if img is None:
         if fallback_to_placeholder:
-            img = create_placeholder_image(size=target_size)
+            img = create_placeholder_image(size=target_size or MODEL_IMAGE_SIZE)
         else:
             raise ValueError(f"Could not load valid image from source: {type(img_source)}")
 
-    if img.size != target_size:
+    if target_size is not None and img.size != target_size:
         img = img.resize(target_size, Image.Resampling.BILINEAR)
 
     return img

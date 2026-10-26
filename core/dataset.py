@@ -1,10 +1,5 @@
-"""
-PyTorch Dataset and DataLoader abstractions for Viral-Lens.
-Provides clean, high-performance batching for multimodal deep learning.
-"""
 from pathlib import Path
 from typing import Dict, Optional, Union
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -16,17 +11,10 @@ from core.features import (
     TRAIN_IMAGE_TRANSFORM,
     EVAL_IMAGE_TRANSFORM
 )
-from core.image_utils import (
-    load_image_for_model,
-    MODEL_IMAGE_SIZE
-)
+from core.image_utils import load_image_for_model
 
 
 class ViralLensDataset(Dataset):
-    """
-    Multimodal PyTorch Dataset for YouTube virality modeling.
-    Loads and standardizes thumbnail images, multilingual titles, tabular metadata, and target log-views.
-    """
     def __init__(
         self,
         df: pd.DataFrame,
@@ -41,12 +29,10 @@ class ViralLensDataset(Dataset):
         self.image_dir = Path(image_dir)
         self.transform = TRAIN_IMAGE_TRANSFORM if is_train else EVAL_IMAGE_TRANSFORM
 
-        # Vectorized pre-computation of tabular features for high training throughput
         raw_tabular = compute_tabular_raw_batch(self.df)
         scaled_tabular = standardize_tabular(raw_tabular, scaler_stats=scaler_stats)
         self.tabular_tensors = torch.from_numpy(scaled_tabular).float()
 
-        # Targets (available during training/validation)
         if "target_log_views" in self.df.columns:
             self.targets = torch.tensor(
                 self.df["target_log_views"].values, dtype=torch.float32
@@ -57,7 +43,6 @@ class ViralLensDataset(Dataset):
         self.titles = self.df["title"].astype(str).tolist()
         self.video_ids = self.df["video_id"].astype(str).tolist()
 
-        # Resolve image paths
         if "thumbnail_path" in self.df.columns:
             self.image_paths = [Path(p) for p in self.df["thumbnail_path"]]
         else:
@@ -67,35 +52,26 @@ class ViralLensDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        # 1. Image loading and augmentation
-        img_path = self.image_paths[idx]
         pil_img = load_image_for_model(
-            img_path,
-            target_size=MODEL_IMAGE_SIZE,
+            self.image_paths[idx],
+            target_size=None,
             fallback_to_placeholder=True
         )
         img_tensor = self.transform(pil_img)
 
-        # 2. Text tokenization
-        text = clean_title(self.titles[idx])
         tokens = self.tokenizer(
-            text,
+            clean_title(self.titles[idx]),
             max_length=32,
             padding="max_length",
             truncation=True,
             return_tensors="pt"
         )
-        input_ids = tokens["input_ids"].squeeze(0)
-        attention_mask = tokens["attention_mask"].squeeze(0)
-
-        # 3. Tabular features
-        tabular_tensor = self.tabular_tensors[idx]
 
         item = {
             "image": img_tensor,
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "tabular": tabular_tensor,
+            "input_ids": tokens["input_ids"].squeeze(0),
+            "attention_mask": tokens["attention_mask"].squeeze(0),
+            "tabular": self.tabular_tensors[idx],
             "video_id": self.video_ids[idx]
         }
 
@@ -114,9 +90,6 @@ def get_dataloader(
     is_train: bool = False,
     num_workers: int = 0
 ) -> DataLoader:
-    """
-    Factory helper to create a PyTorch DataLoader from a dataframe.
-    """
     if shuffle is None:
         shuffle = is_train
 

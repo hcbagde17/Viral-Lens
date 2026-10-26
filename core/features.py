@@ -1,19 +1,12 @@
-"""
-Feature extraction and preprocessing pipeline for Viral-Lens.
-Shared verbatim by training, offline evaluation, and live serving to eliminate train-serving skew.
-"""
 import math
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
 from torchvision import transforms
-from typing import Dict, List, Optional, Tuple, Union
 from PIL import Image
 
-from core.image_utils import (
-    load_image_for_model,
-    MODEL_IMAGE_SIZE
-)
+from core.image_utils import load_image_for_model, MODEL_IMAGE_SIZE
 
 TABULAR_FEATURE_NAMES: List[str] = [
     "log_subs",
@@ -25,18 +18,15 @@ TABULAR_FEATURE_NAMES: List[str] = [
     "weekday_cos"
 ]
 
-# ImageNet normalization parameters
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# Evaluation / Serving image transform
 EVAL_IMAGE_TRANSFORM = transforms.Compose([
     transforms.Resize(MODEL_IMAGE_SIZE, interpolation=transforms.InterpolationMode.BILINEAR),
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 ])
 
-# Training image transform (light augmentation: crops, slight color jitter; NO horizontal flips)
 TRAIN_IMAGE_TRANSFORM = transforms.Compose([
     transforms.Resize((256, 256), interpolation=transforms.InterpolationMode.BILINEAR),
     transforms.RandomCrop(MODEL_IMAGE_SIZE),
@@ -45,17 +35,12 @@ TRAIN_IMAGE_TRANSFORM = transforms.Compose([
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 ])
 
-# Neutral fallback cyclical encoding (start of cycle / neutral orientation)
 NEUTRAL_TIME_ENCODING: Tuple[float, float, float, float] = (0.0, 1.0, 0.0, 1.0)
 
 
 def _parse_cyclical_time(
     published_at: Optional[Union[str, pd.Timestamp]]
 ) -> Tuple[float, float, float, float]:
-    """
-    Parses published timestamp into cyclical sine/cosine pairs:
-    (hour_sin, hour_cos, weekday_sin, weekday_cos).
-    """
     if published_at is None or pd.isna(published_at) or not str(published_at).strip():
         return NEUTRAL_TIME_ENCODING
 
@@ -81,10 +66,6 @@ def compute_tabular_raw(
     subscriber_count: Union[int, float],
     published_at: Optional[Union[str, pd.Timestamp]] = None
 ) -> np.ndarray:
-    """
-    Computes unscaled raw tabular features:
-    [log_subs, log_duration, is_short, hour_sin, hour_cos, weekday_sin, weekday_cos].
-    """
     d = max(0.0, float(duration))
     s = max(0.0, float(subscriber_count))
     h_sin, h_cos, w_sin, w_cos = _parse_cyclical_time(published_at)
@@ -100,12 +81,7 @@ def compute_tabular_raw(
     ], dtype=np.float32)
 
 
-def compute_tabular_raw_batch(
-    df: pd.DataFrame
-) -> np.ndarray:
-    """
-    Vectorized computation of raw tabular features for an entire DataFrame.
-    """
+def compute_tabular_raw_batch(df: pd.DataFrame) -> np.ndarray:
     durations = np.maximum(0.0, df["duration"].values.astype(np.float64))
     subs = np.maximum(0.0, df["subscriber_count"].values.astype(np.float64))
 
@@ -114,7 +90,7 @@ def compute_tabular_raw_batch(
     is_short = (durations <= 60.0).astype(np.float32)
 
     if "published_at" in df.columns:
-        dt = pd.to_datetime(df["published_at"], utc=True)
+        dt = pd.to_datetime(df["published_at"], utc=True, errors="coerce")
         hours = dt.dt.hour.fillna(0).values.astype(np.float64)
         weekdays = dt.dt.weekday.fillna(0).values.astype(np.float64)
         hour_sin = np.sin(2.0 * np.pi * hours / 24.0)
@@ -139,12 +115,7 @@ def compute_tabular_raw_batch(
     ]).astype(np.float32)
 
 
-def fit_tabular_scaler(
-    train_df: pd.DataFrame
-) -> Dict[str, Union[List[str], List[float]]]:
-    """
-    Computes mean and std statistics for tabular features on the training split only.
-    """
+def fit_tabular_scaler(train_df: pd.DataFrame) -> Dict[str, Union[List[str], List[float]]]:
     raw_feats = compute_tabular_raw_batch(train_df)
     mean = np.mean(raw_feats, axis=0)
     raw_std = np.std(raw_feats, axis=0)
@@ -161,9 +132,6 @@ def standardize_tabular(
     features: np.ndarray,
     scaler_stats: Optional[Dict[str, Union[List[str], List[float]]]] = None
 ) -> np.ndarray:
-    """
-    Standardizes features using pre-computed mean and std. Supports 1D and 2D arrays.
-    """
     if scaler_stats is None:
         return features.astype(np.float32)
 
@@ -173,9 +141,6 @@ def standardize_tabular(
 
 
 def clean_title(title: str) -> str:
-    """
-    Strips leading/trailing whitespace while preserving emojis and multilingual characters.
-    """
     if not title or not isinstance(title, str):
         return ""
     return title.strip()
@@ -191,20 +156,14 @@ def preprocess_single_sample(
     scaler_stats: Optional[Dict] = None,
     is_train: bool = False
 ) -> Dict[str, torch.Tensor]:
-    """
-    Transforms multimodal inputs into model-ready PyTorch tensors.
-    """
-    # 1. Image
-    pil_img = load_image_for_model(image, target_size=MODEL_IMAGE_SIZE, fallback_to_placeholder=True)
+    pil_img = load_image_for_model(image, target_size=None, fallback_to_placeholder=True)
     img_transform = TRAIN_IMAGE_TRANSFORM if is_train else EVAL_IMAGE_TRANSFORM
     output = {"image": img_transform(pil_img)}
 
-    # 2. Tabular
     raw_tab = compute_tabular_raw(duration, subscriber_count, published_at)
     scaled_tab = standardize_tabular(raw_tab, scaler_stats=scaler_stats)
     output["tabular"] = torch.from_numpy(scaled_tab).float()
 
-    # 3. Text
     if tokenizer is not None:
         tokens = tokenizer(
             clean_title(title),
@@ -220,9 +179,6 @@ def preprocess_single_sample(
 
 
 def compute_target(view_count: Union[int, float]) -> float:
-    """
-    Computes log views target: ln(view_count + 1).
-    """
     return float(math.log1p(max(0.0, float(view_count))))
 
 
@@ -230,7 +186,4 @@ def compute_virality_score(
     predicted_log_views: float,
     subscriber_count: Union[int, float]
 ) -> float:
-    """
-    Computes virality score: predicted_log_views - ln(subs + 1).
-    """
     return float(predicted_log_views - compute_target(subscriber_count))
